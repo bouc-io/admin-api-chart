@@ -1,0 +1,92 @@
+# Base values for admin-api-chart
+# These values should never change between environments or over time
+
+replicaCount: 1
+
+image:
+  registry: ghcr.io/bouc-io
+  repository: application/admin/admin-api-server
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  port: 80
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+# Applied to the Deployment object (not the pod template). Reloader watches the
+# Secrets and ConfigMaps this workload references and triggers a rolling restart
+# when one changes, which is what makes DB password rotation take effect: a
+# secretKeyRef env var is resolved at pod start and never refreshed.
+# Inert if stakater/Reloader is not installed in the cluster.
+# Secrets consumed by admin-api, both produced by External Secrets.
+# appSecret is required (admin-api throws without the Keycloak admin password);
+# encryptionSecret is optional and read with optional:true.
+appSecret:
+  name: boucio-admin-app-secret
+  keycloakAdminPasswordKey: KEYCLOAK_ADMIN_PASSWORD
+encryptionSecret:
+  name: boucio-admin-encryption-secret
+  key: ENCRYPTION_KEY
+
+deploymentAnnotations:
+  reloader.stakater.com/auto: "true"
+
+podAnnotations:
+  # Scraped by Prometheus for app-level metrics at /metrics. Port matches the container.
+  prometheus.io/scrape: "true"
+  prometheus.io/path: "/metrics"
+  prometheus.io/port: "3002"
+podLabels: {}
+podSecurityContext: {}
+securityContext: {}
+
+resources: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+
+volumes: []
+volumeMounts: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Default environment variables (can be overridden per environment)
+environment:
+  PORT: 3002
+  # OpenTelemetry — OTEL_EXPORTER_OTLP_ENDPOINT is built from the node IP in the
+  # deployment template. service.name surfaces in Jaeger/Grafana.
+  OTEL_SERVICE_NAME: "admin-api-server"
+  # Overridden from the cluster-vars ConfigMap via the HelmRelease (Flux postBuild).
+  ENVIRONMENT_ID: "unknown"
+  NODE_ENV: "development"
+  LOG_LEVEL: "info"
+  ALLOW_SELF_SIGNED_CERTS: "false"
+  KEYCLOAK_ADMIN_URL: ""
+  KEYCLOAK_REALM: "users"
+  KEYCLOAK_ADMIN_USER: ""
+  AGENT_API_URL: ""
+  MEMORY_API_URL: ""
+  CHATBOT_API_URL: ""
+  OLLAMA_URL: ""
+
+# Ensure bundled PostgreSQL subchart pulls from the Bitnami legacy registry
+postgresql:
+  global:
+    security:
+      allowInsecureImages: true # Required now since we move to Bitnami Legacy for now.
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+    tag: 17.5.0-debian-12-r18

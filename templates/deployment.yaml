@@ -1,0 +1,150 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "admin-api-chart.fullname" . }}
+  {{- with .Values.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  labels:
+    {{- include "admin-api-chart.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "admin-api-chart.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "admin-api-chart.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with include "admin-api-chart.imagePullSecrets" . | fromYamlArray }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "admin-api-chart.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: {{ include "admin-api-chart.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.environment.PORT }}
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: {{ .Values.environment.NODE_ENV | quote }}
+            - name: PORT
+              value: {{ .Values.environment.PORT | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.environment.LOG_LEVEL | quote }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "admin-api-chart.dbSecretName" . }}
+                  key: DATABASE_URL
+            - name: ALLOW_SELF_SIGNED_CERTS
+              value: {{ .Values.environment.ALLOW_SELF_SIGNED_CERTS | quote }}
+            # Encrypts provider API keys at rest. optional:true keeps today's
+            # behaviour when the key is absent: admin-api warns and stores them
+            # in plaintext rather than refusing to start.
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.encryptionSecret.name | quote }}
+                  key: {{ .Values.encryptionSecret.key | quote }}
+                  optional: true
+            - name: KEYCLOAK_ADMIN_URL
+              value: {{ .Values.environment.KEYCLOAK_ADMIN_URL | quote }}
+            - name: KEYCLOAK_REALM
+              value: {{ .Values.environment.KEYCLOAK_REALM | quote }}
+            - name: KEYCLOAK_ADMIN_USER
+              value: {{ .Values.environment.KEYCLOAK_ADMIN_USER | quote }}
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appSecret.name | quote }}
+                  key: {{ .Values.appSecret.keycloakAdminPasswordKey | quote }}
+            - name: KEYCLOAK_ADMIN_GRANT_TYPE
+              value: {{ .Values.environment.KEYCLOAK_ADMIN_GRANT_TYPE | default "password" | quote }}
+            - name: AGENT_API_URL
+              value: {{ .Values.environment.AGENT_API_URL | quote }}
+            - name: MEMORY_API_URL
+              value: {{ .Values.environment.MEMORY_API_URL | quote }}
+            - name: CHATBOT_API_URL
+              value: {{ .Values.environment.CHATBOT_API_URL | quote }}
+            - name: OLLAMA_URL
+              value: {{ .Values.environment.OLLAMA_URL | quote }}
+            # OpenTelemetry — OTLP traces + metrics to the node-local collector.
+            # The collector is a hostNetwork daemonset listening on every node, so it
+            # is reached via the node IP (downward API), NOT a ClusterIP service.
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(HOST_IP):4318"
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.environment.OTEL_SERVICE_NAME | quote }}
+            # Stamped on direct-scraped /metrics so they line up with the collector-routed
+            # otel_* series. Sourced from the cluster-vars ConfigMap via the HelmRelease.
+            - name: ENVIRONMENT_ID
+              value: {{ .Values.environment.ENVIRONMENT_ID | quote }}
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
