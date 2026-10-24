@@ -1,0 +1,64 @@
+# Shared Helm validation jobs. Private project: the identity running the pipeline
+# needs at least Reporter on bouc-io/ci-templates or the include fails to resolve.
+include:
+  - project: 'bouc-io/ci-templates'
+    ref: main
+    file: '/helm.yml'
+
+stages:
+  - validate
+  - build
+  - publish
+
+variables:
+  HELM_EXPERIMENTAL_OCI: 1
+  CHART: admin-api-chart
+
+# Lints the chart against both value overlays (base+lcl and base+snbx). Runs in
+# the validate stage so a broken chart never reaches helm package or publish-oci.
+helm-lint:
+  extends: .helm-lint
+
+build:
+  stage: build
+  image:
+    name: alpine/helm:latest
+    entrypoint: ["/bin/sh", "-c"]
+  before_script:
+    - helm version
+    - helm dependency update
+  script:
+    - helm package .
+  artifacts:
+    paths:
+      - ${CHART}-*.tgz
+
+# Publish the packaged chart as an OCI artifact to the shared charts registry
+# consumed by the FluxCD boucio-charts HelmRepository. This is the only publish
+# path: nothing consumes the per-project HTTP package registry any more.
+# CHARTS_DEPLOY_USER / CHARTS_DEPLOY_TOKEN are group-level CI variables backed by
+# a bouc-io group deploy token with write_registry scope (CI_JOB_TOKEN can only
+# reach the current project's registry).
+publish-oci:
+  stage: publish
+  # Default branch only. The job always runs there, and the guard below turns a
+  # missing CHARTS_DEPLOY_TOKEN into a red pipeline rather than a skipped job -
+  # a silent skip would leave Flux serving a stale chart with nothing looking
+  # broken on the cluster. CHARTS_DEPLOY_TOKEN is a *protected* variable, so it
+  # is absent on feature branches; those never reach this job.
+  rules:
+    - if: '$CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH'
+      when: never
+    - when: on_success
+  image:
+    name: alpine/helm:latest
+    entrypoint: ["/bin/sh", "-c"]
+  before_script:
+    # Extract the 'version' value from Chart.yaml
+    - export HELM_CHART_VER=$(grep '^version:' ./Chart.yaml | awk '{print $2}')
+  dependencies:
+    - build
+  script:
+    - test -n "$CHARTS_DEPLOY_TOKEN" || { echo "CHARTS_DEPLOY_TOKEN is not set - chart NOT published"; exit 1; }
+    - echo "$CHARTS_DEPLOY_TOKEN" | helm registry login registry.gitlab.com -u "$CHARTS_DEPLOY_USER" --password-stdin
+    - helm push ${CHART}-${HELM_CHART_VER}.tgz oci://registry.gitlab.com/bouc-io/charts
